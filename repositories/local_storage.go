@@ -34,27 +34,6 @@ func (l LocalStorage) Write(pokemons []models.Pokemon) error {
 	return nil
 }
 
-func (l LocalStorage) ReadOld() ([]models.Pokemon, error) {
-	file, fErr := os.Open(filePath)
-	defer file.Close()
-	if fErr != nil {
-		return nil, fErr
-	}
-
-	r := csv.NewReader(file)
-	records, rErr := r.ReadAll()
-	if rErr != nil {
-		return nil, rErr
-	}
-
-	pokemons, err := parseCSVData(records)
-	if err != nil {
-		return nil, err
-	}
-
-	return pokemons, nil
-}
-
 func (l LocalStorage) Read(ctx context.Context, cancel context.CancelFunc) chan models.Pokemon {
 	in := generateLines(ctx, cancel)
 
@@ -182,41 +161,4 @@ func buildRecords(pokemons []models.Pokemon) [][]string {
 	}
 
 	return records
-}
-
-func parseCSVData(records [][]string) ([]models.Pokemon, error) {
-	var pokemons []models.Pokemon
-	for i, record := range records {
-		if i == 0 {
-			continue
-		}
-
-		id, err := strconv.Atoi(record[0])
-		if err != nil {
-			return nil, err
-		}
-
-		height, err := strconv.Atoi(record[2])
-		if err != nil {
-			return nil, err
-		}
-
-		weight, err := strconv.Atoi(record[3])
-		if err != nil {
-			return nil, err
-		}
-
-		pokemon := models.Pokemon{
-			ID:              id,
-			Name:            record[1],
-			Height:          height,
-			Weight:          weight,
-			Abilities:       nil,
-			FlatAbilityURLs: record[4],
-			EffectEntries:   nil,
-		}
-		pokemons = append(pokemons, pokemon)
-	}
-
-	return pokemons, nil
 }
