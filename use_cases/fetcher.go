@@ -5,7 +5,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"time"
 
 	"GoConcurrency-Bootcamp-2022/models"
 )
@@ -59,14 +58,9 @@ func (f Fetcher) generatePokeStream(ctx context.Context, from, to int) chan mode
 				return
 			}
 
-			if id > 1000 {
-				time.Sleep(time.Duration(100) * time.Millisecond)
-			}
-
 			wg.Add(1)
 			go func(ctx context.Context, cancelFn context.CancelFunc, id int) {
 				defer wg.Done()
-				time.Sleep(time.Duration(100+id) * time.Millisecond)
 
 				if ctx.Err() != nil {
 					log.Printf("breaking goroutine (#%d) process due to invalid context: %v\n", id, ctx.Err())

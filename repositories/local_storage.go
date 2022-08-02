@@ -1,11 +1,15 @@
 package repositories
 
 import (
+	"bufio"
+	"context"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"GoConcurrency-Bootcamp-2022/models"
 )
@@ -30,7 +34,7 @@ func (l LocalStorage) Write(pokemons []models.Pokemon) error {
 	return nil
 }
 
-func (l LocalStorage) Read() ([]models.Pokemon, error) {
+func (l LocalStorage) ReadOld() ([]models.Pokemon, error) {
 	file, fErr := os.Open(filePath)
 	defer file.Close()
 	if fErr != nil {
@@ -49,6 +53,119 @@ func (l LocalStorage) Read() ([]models.Pokemon, error) {
 	}
 
 	return pokemons, nil
+}
+
+func (l LocalStorage) Read(ctx context.Context, cancel context.CancelFunc) chan models.Pokemon {
+	in := generateLines(ctx, cancel)
+
+	return fanIn(ctx, cancel, in)
+}
+
+func generateLines(ctx context.Context, cancel context.CancelFunc) chan string {
+	out := make(chan string)
+
+	go func() {
+		file, err := os.Open(filePath)
+		if err != nil {
+			log.Printf("cannot read file due to err: %v\n", err)
+			cancel()
+			return
+		}
+		defer file.Close()
+
+		fileScanner := bufio.NewScanner(file)
+		fileScanner.Split(bufio.ScanLines)
+
+		for fileScanner.Scan() {
+			select {
+			case <-ctx.Done():
+				log.Println("finishing read generate line due to context cancelled")
+				return
+			default:
+				out <- fileScanner.Text()
+			}
+		}
+
+		close(out)
+	}()
+
+	return out
+}
+
+func fanIn(ctx context.Context, cancel context.CancelFunc, in chan string) chan models.Pokemon {
+	out := make(chan models.Pokemon)
+	wg := sync.WaitGroup{}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		var i int = -1
+		for rawPokemon := range in {
+			i++
+			if i == 0 {
+				continue
+			}
+
+			if ctx.Err() != nil {
+				log.Printf("breaking 'For' statement from: %d in order to avoid performing unnecessary goroutines", i)
+				return
+			}
+
+			wg.Add(1)
+			go func(rawPokemon string) {
+				defer wg.Done()
+
+				if ctx.Err() != nil {
+					log.Printf("breaking goroutine (#%d) process due to invalid context: %v\n", i, ctx.Err())
+					return
+				}
+
+				pokemonProperties := strings.Split(rawPokemon, ",")
+
+				id, err := strconv.Atoi(pokemonProperties[0])
+				if err != nil {
+					log.Printf("cannot get pokemon id due to err: %v\n", err)
+					cancel()
+					return
+				}
+
+				height, err := strconv.Atoi(pokemonProperties[2])
+				if err != nil {
+					log.Printf("cannot get pokemon height due to err: %v\n", err)
+					cancel()
+					return
+				}
+
+				weight, err := strconv.Atoi(pokemonProperties[3])
+				if err != nil {
+					log.Printf("cannot get pokemon weight due to err: %v\n", err)
+					cancel()
+					return
+				}
+
+				pokemon := models.Pokemon{
+					ID:              id,
+					Name:            pokemonProperties[1],
+					Height:          height,
+					Weight:          weight,
+					Abilities:       nil,
+					FlatAbilityURLs: pokemonProperties[4],
+					EffectEntries:   nil,
+				}
+
+				out <- pokemon
+			}(rawPokemon)
+
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(out)
+	}()
+
+	return out
 }
 
 func buildRecords(pokemons []models.Pokemon) [][]string {
