@@ -21,7 +21,7 @@ func NewAPI(fetcher fetcher, refresher refresher, getter getter) API {
 }
 
 type fetcher interface {
-	Fetch(from, to int) error
+	Fetch(ctx context.Context, from, to int) error
 }
 
 type refresher interface {
@@ -46,7 +46,7 @@ func (api API) FillCSV(c *gin.Context) {
 		return
 	}
 
-	if err := api.Fetch(requestBody.From, requestBody.To); err != nil {
+	if err := api.Fetch(c, requestBody.From, requestBody.To); err != nil {
 		c.Status(http.StatusInternalServerError)
 		fmt.Println(err)
 		return
@@ -58,6 +58,7 @@ func (api API) FillCSV(c *gin.Context) {
 //RefreshCache feeds the csv data and save in redis
 func (api API) RefreshCache(c *gin.Context) {
 	if err := api.Refresh(c); err != nil {
+		c.Error(err)
 		c.Status(http.StatusInternalServerError)
 		return
 	}

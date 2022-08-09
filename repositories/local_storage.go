@@ -1,8 +1,11 @@
 package repositories
 
 import (
+	"bufio"
+	"context"
 	"encoding/csv"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -30,25 +33,102 @@ func (l LocalStorage) Write(pokemons []models.Pokemon) error {
 	return nil
 }
 
-func (l LocalStorage) Read() ([]models.Pokemon, error) {
-	file, fErr := os.Open(filePath)
-	defer file.Close()
-	if fErr != nil {
-		return nil, fErr
-	}
+func (l LocalStorage) Read(ctx context.Context, cancel context.CancelFunc) []<-chan models.Pokemon {
+	in := generateLines(ctx, cancel)
 
-	r := csv.NewReader(file)
-	records, rErr := r.ReadAll()
-	if rErr != nil {
-		return nil, rErr
-	}
+	worker1 := fanOut(ctx, cancel, in)
+	worker2 := fanOut(ctx, cancel, in)
+	worker3 := fanOut(ctx, cancel, in)
 
-	pokemons, err := parseCSVData(records)
-	if err != nil {
-		return nil, err
-	}
+	return []<-chan models.Pokemon{worker1, worker2, worker3}
+}
 
-	return pokemons, nil
+func generateLines(ctx context.Context, cancel context.CancelFunc) <-chan string {
+	out := make(chan string)
+
+	go func() {
+		file, err := os.Open(filePath)
+		if err != nil {
+			log.Printf("cannot read file due to err: %v\n", err)
+			cancel()
+			return
+		}
+		defer file.Close()
+
+		fileScanner := bufio.NewScanner(file)
+		fileScanner.Split(bufio.ScanLines)
+
+		if fileScanner.Scan() {
+			fileScanner.Text()
+		}
+
+		for fileScanner.Scan() {
+			select {
+			case <-ctx.Done():
+				log.Println("finishing read generate line due to context cancelled")
+				return
+			default:
+				out <- fileScanner.Text()
+			}
+		}
+
+		close(out)
+	}()
+
+	return out
+}
+
+func fanOut(ctx context.Context, cancel context.CancelFunc, in <-chan string) <-chan models.Pokemon {
+	out := make(chan models.Pokemon)
+
+	go func() {
+		defer close(out)
+
+		for rawPokemon := range in {
+
+			if ctx.Err() != nil {
+				log.Printf("finishing worker due to invalid context: %v\n", ctx.Err())
+				return
+			}
+
+			pokemonProperties := strings.Split(rawPokemon, ",")
+
+			id, err := strconv.Atoi(pokemonProperties[0])
+			if err != nil {
+				log.Printf("cannot get pokemon id due to err: %v\n", err)
+				cancel()
+				return
+			}
+
+			height, err := strconv.Atoi(pokemonProperties[2])
+			if err != nil {
+				log.Printf("cannot get pokemon height due to err: %v\n", err)
+				cancel()
+				return
+			}
+
+			weight, err := strconv.Atoi(pokemonProperties[3])
+			if err != nil {
+				log.Printf("cannot get pokemon weight due to err: %v\n", err)
+				cancel()
+				return
+			}
+
+			pokemon := models.Pokemon{
+				ID:              id,
+				Name:            pokemonProperties[1],
+				Height:          height,
+				Weight:          weight,
+				Abilities:       nil,
+				FlatAbilityURLs: pokemonProperties[4],
+				EffectEntries:   nil,
+			}
+
+			out <- pokemon
+		}
+	}()
+
+	return out
 }
 
 func buildRecords(pokemons []models.Pokemon) [][]string {
@@ -65,41 +145,4 @@ func buildRecords(pokemons []models.Pokemon) [][]string {
 	}
 
 	return records
-}
-
-func parseCSVData(records [][]string) ([]models.Pokemon, error) {
-	var pokemons []models.Pokemon
-	for i, record := range records {
-		if i == 0 {
-			continue
-		}
-
-		id, err := strconv.Atoi(record[0])
-		if err != nil {
-			return nil, err
-		}
-
-		height, err := strconv.Atoi(record[2])
-		if err != nil {
-			return nil, err
-		}
-
-		weight, err := strconv.Atoi(record[3])
-		if err != nil {
-			return nil, err
-		}
-
-		pokemon := models.Pokemon{
-			ID:              id,
-			Name:            record[1],
-			Height:          height,
-			Weight:          weight,
-			Abilities:       nil,
-			FlatAbilityURLs: record[4],
-			EffectEntries:   nil,
-		}
-		pokemons = append(pokemons, pokemon)
-	}
-
-	return pokemons, nil
 }
