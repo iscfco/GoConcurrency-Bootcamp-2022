@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 
 	"GoConcurrency-Bootcamp-2022/models"
 )
@@ -34,13 +33,17 @@ func (l LocalStorage) Write(pokemons []models.Pokemon) error {
 	return nil
 }
 
-func (l LocalStorage) Read(ctx context.Context, cancel context.CancelFunc) chan models.Pokemon {
+func (l LocalStorage) Read(ctx context.Context, cancel context.CancelFunc) []<-chan models.Pokemon {
 	in := generateLines(ctx, cancel)
 
-	return fanIn(ctx, cancel, in)
+	worker1 := fanOut(ctx, cancel, in)
+	worker2 := fanOut(ctx, cancel, in)
+	worker3 := fanOut(ctx, cancel, in)
+
+	return []<-chan models.Pokemon{worker1, worker2, worker3}
 }
 
-func generateLines(ctx context.Context, cancel context.CancelFunc) chan string {
+func generateLines(ctx context.Context, cancel context.CancelFunc) <-chan string {
 	out := make(chan string)
 
 	go func() {
@@ -54,6 +57,10 @@ func generateLines(ctx context.Context, cancel context.CancelFunc) chan string {
 
 		fileScanner := bufio.NewScanner(file)
 		fileScanner.Split(bufio.ScanLines)
+
+		if fileScanner.Scan() {
+			fileScanner.Text()
+		}
 
 		for fileScanner.Scan() {
 			select {
@@ -71,77 +78,54 @@ func generateLines(ctx context.Context, cancel context.CancelFunc) chan string {
 	return out
 }
 
-func fanIn(ctx context.Context, cancel context.CancelFunc, in chan string) chan models.Pokemon {
+func fanOut(ctx context.Context, cancel context.CancelFunc, in <-chan string) <-chan models.Pokemon {
 	out := make(chan models.Pokemon)
-	wg := sync.WaitGroup{}
 
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer close(out)
 
-		var i int = -1
 		for rawPokemon := range in {
-			i++
-			if i == 0 {
-				continue
-			}
 
 			if ctx.Err() != nil {
-				log.Printf("breaking 'For' statement from: %d in order to avoid performing unnecessary goroutines", i)
+				log.Printf("finishing worker due to invalid context: %v\n", ctx.Err())
 				return
 			}
 
-			wg.Add(1)
-			go func(rawPokemon string) {
-				defer wg.Done()
+			pokemonProperties := strings.Split(rawPokemon, ",")
 
-				if ctx.Err() != nil {
-					log.Printf("breaking goroutine (#%d) process due to invalid context: %v\n", i, ctx.Err())
-					return
-				}
+			id, err := strconv.Atoi(pokemonProperties[0])
+			if err != nil {
+				log.Printf("cannot get pokemon id due to err: %v\n", err)
+				cancel()
+				return
+			}
 
-				pokemonProperties := strings.Split(rawPokemon, ",")
+			height, err := strconv.Atoi(pokemonProperties[2])
+			if err != nil {
+				log.Printf("cannot get pokemon height due to err: %v\n", err)
+				cancel()
+				return
+			}
 
-				id, err := strconv.Atoi(pokemonProperties[0])
-				if err != nil {
-					log.Printf("cannot get pokemon id due to err: %v\n", err)
-					cancel()
-					return
-				}
+			weight, err := strconv.Atoi(pokemonProperties[3])
+			if err != nil {
+				log.Printf("cannot get pokemon weight due to err: %v\n", err)
+				cancel()
+				return
+			}
 
-				height, err := strconv.Atoi(pokemonProperties[2])
-				if err != nil {
-					log.Printf("cannot get pokemon height due to err: %v\n", err)
-					cancel()
-					return
-				}
+			pokemon := models.Pokemon{
+				ID:              id,
+				Name:            pokemonProperties[1],
+				Height:          height,
+				Weight:          weight,
+				Abilities:       nil,
+				FlatAbilityURLs: pokemonProperties[4],
+				EffectEntries:   nil,
+			}
 
-				weight, err := strconv.Atoi(pokemonProperties[3])
-				if err != nil {
-					log.Printf("cannot get pokemon weight due to err: %v\n", err)
-					cancel()
-					return
-				}
-
-				pokemon := models.Pokemon{
-					ID:              id,
-					Name:            pokemonProperties[1],
-					Height:          height,
-					Weight:          weight,
-					Abilities:       nil,
-					FlatAbilityURLs: pokemonProperties[4],
-					EffectEntries:   nil,
-				}
-
-				out <- pokemon
-			}(rawPokemon)
-
+			out <- pokemon
 		}
-	}()
-
-	go func() {
-		wg.Wait()
-		close(out)
 	}()
 
 	return out
